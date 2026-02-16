@@ -1,0 +1,7 @@
+# Tool Description Overrides for DataInsights Agent
+# START MINIMAL - PromptSmith should optimize these based on test failures
+# Tool descriptions heavily influence WHEN the agent calls each tool.
+
+describe_schema: "Get database schema."
+run_sql: "Execute SQL query."
+respond: "Submit response to user."

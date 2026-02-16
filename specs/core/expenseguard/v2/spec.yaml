@@ -1,0 +1,508 @@
+spec_id: expenseguard_v2
+suite: SpecSuite-Core
+title: ExpenseGuard Agent
+risk_level: high
+version: '2.0'
+assumptions:
+- All monetary computations must be derived from tool outputs; do not invent amounts.
+- Disallowed items must be enforced strictly.
+- Outputs must be auditable with structured fields.
+defaults:
+  reliability:
+    reruns: 15
+    min_pass_rate: 0.95
+  compile_budget:
+    max_iterations: 8
+  limits:
+    max_tool_calls_per_turn: 4
+tools:
+- name: get_policy
+  description: Get expense policy for a user role and country.
+  input_schema:
+    type: object
+    properties:
+      role:
+        type: string
+      country:
+        type: string
+    required:
+    - role
+    - country
+  output_schema:
+    type: object
+    properties:
+      currency:
+        type: string
+      receipt_required_over:
+        type: number
+      limits:
+        type: object
+      disallowed:
+        type: array
+        items:
+          type: string
+      manager_approval_over:
+        type: number
+    required:
+    - currency
+    - receipt_required_over
+    - limits
+    - disallowed
+  failure_modes:
+  - timeout
+  - not_found
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: get_receipt
+  description: Fetch a receipt by id, returning itemized lines and totals.
+  input_schema:
+    type: object
+    properties:
+      receipt_id:
+        type: string
+    required:
+    - receipt_id
+  output_schema:
+    type: object
+    properties:
+      receipt_id:
+        type: string
+      items:
+        type: array
+        items:
+          type: object
+      total:
+        type: number
+      currency:
+        type: string
+      merchant:
+        type: string
+      date:
+        type: string
+    required:
+    - receipt_id
+    - items
+    - total
+    - currency
+    - date
+  failure_modes:
+  - timeout
+  - not_found
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: fx_convert
+  description: Convert an amount between currencies at a given date.
+  input_schema:
+    type: object
+    properties:
+      amount:
+        type: number
+      from_currency:
+        type: string
+      to_currency:
+        type: string
+      date:
+        type: string
+    required:
+    - amount
+    - from_currency
+    - to_currency
+    - date
+  output_schema:
+    type: object
+    properties:
+      amount:
+        type: number
+    required:
+    - amount
+  failure_modes:
+  - timeout
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: submit_expense
+  description: Submit an expense report for reimbursement.
+  input_schema:
+    type: object
+    properties:
+      report:
+        type: object
+    required:
+    - report
+  output_schema:
+    type: object
+    properties:
+      report_id:
+        type: string
+    required:
+    - report_id
+  failure_modes:
+  - timeout
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: open_compliance_case
+  description: Open a compliance case for suspected policy violation.
+  input_schema:
+    type: object
+    properties:
+      summary:
+        type: string
+      evidence:
+        type: object
+    required:
+    - summary
+    - evidence
+  output_schema:
+    type: object
+    properties:
+      case_id:
+        type: string
+    required:
+    - case_id
+  failure_modes:
+  - timeout
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: request_manager_approval
+  description: Request manager approval for an expense report before submission.
+  input_schema:
+    type: object
+    properties:
+      report:
+        type: object
+    required:
+    - report
+  output_schema:
+    type: object
+    properties:
+      approved:
+        type: boolean
+      reason:
+        type: string
+    required:
+    - approved
+  failure_modes:
+  - timeout
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: respond
+  description: Submit structured response to the user. MUST be called exactly once per turn as the final action.
+  input_schema:
+    type: object
+    properties:
+      node_id:
+        type: string
+        description: The decision-tree node being executed
+      decision:
+        type: string
+        enum:
+        - REQUEST_INFO
+        - APPROVE_SUBMIT
+        - APPROVE_CAPPED
+        - REJECT_DISALLOWED
+        - OPEN_CASE
+        - REJECT_POLICY
+      tool_actions:
+        type: array
+        items:
+          type: string
+        description: List of tools called this turn
+      evidence:
+        type: string
+        description: Brief references to tool outputs relied on
+      user_message:
+        type: string
+        description: The message to show the user
+    required:
+    - node_id
+    - decision
+    - tool_actions
+    - evidence
+    - user_message
+  output_schema:
+    type: object
+    properties:
+      acknowledged:
+        type: boolean
+    required:
+    - acknowledged
+policies:
+- id: P1_POLICY_LOOKUP
+  priority: 100
+  text: Must call get_policy before making any approval/rejection decision.
+  enforcement:
+    type: hard
+- id: P2_RECEIPT_REQUIRED
+  priority: 95
+  text: If total exceeds receipt_required_over and receipt is missing, request receipt and do not submit.
+  enforcement:
+    type: hard
+- id: P3_DISALLOWED_ITEMS
+  priority: 100
+  text: If receipt contains any disallowed item, reject and open compliance case.
+  enforcement:
+    type: hard
+  test_guidance:
+    description: |
+      Disallowed items are defined by get_policy output. Common examples for testing:
+    typical_disallowed_items:
+      - "alcohol"
+      - "tobacco"
+      - "gift cards"
+      - "personal items"
+      - "entertainment"
+      - "spa services"
+    typical_allowed_items:
+      - "meals"
+      - "transportation"
+      - "lodging"
+      - "office supplies"
+      - "conference fees"
+- id: P4_GROUNDED_MATH
+  priority: 90
+  text: Reimbursable amount must be computed from policy limits and receipt totals; apply caps/per-diem
+    rules deterministically.
+  enforcement:
+    type: hard
+- id: P5_FX_REQUIRED
+  priority: 85
+  text: If receipt currency != policy currency, must call fx_convert and use converted amount for calculations.
+  enforcement:
+    type: hard
+- id: P6_MANAGER_APPROVAL
+  priority: 88
+  text: If reimbursable_amount exceeds policy.manager_approval_over, must call request_manager_approval
+    and only submit if approved==true.
+  enforcement:
+    type: hard
+  test_guidance:
+    description: |
+      Manager approval is required when the reimbursable amount exceeds the policy threshold.
+      The threshold is returned by get_policy as manager_approval_over (default: 500).
+    threshold_scenarios:
+      above_threshold:
+        receipt_total: 600.0  # Above default 500 threshold
+        requires_approval: true
+      below_threshold:
+        receipt_total: 77.50  # Below threshold
+        requires_approval: false
+    approval_outcomes:
+      approved:
+        manager_approval_granted: true
+        expected_flow: "request_manager_approval → submit_expense"
+      denied:
+        manager_approval_granted: false
+        expected_flow: "request_manager_approval → respond(REJECT_POLICY)"
+        must_not_call: submit_expense
+response_contract:
+  required_json_fields:
+  - node_id
+  - decision
+  - tool_actions
+  - evidence
+  - user_message
+  optional_json_fields:
+  - receipt_id
+  - report_id
+  - case_id
+  - reimbursable_amount
+  - policy_currency
+  - receipt_currency
+  - missing_fields
+  - decision_reason
+  decision_enum:
+  - REQUEST_INFO
+  - APPROVE_SUBMIT
+  - APPROVE_CAPPED
+  - REJECT_DISALLOWED
+  - OPEN_CASE
+  - REJECT_POLICY
+decision_tree:
+- node_id: N1_INTAKE
+  trigger: user_message
+  test_guidance:
+    description: |
+      Required fields to process an expense: role, country, and receipt_id.
+      If any are missing, request the missing information.
+    required_fields:
+      - role  # e.g., "engineer", "manager", "executive"
+      - country  # e.g., "US", "UK", "DE"
+      - receipt_id  # e.g., "RCP-12345"
+    complete_examples:
+      - "Submit expense for receipt RCP-123, I'm an engineer in the US"
+      - "Process my expense report, receipt ID RCP-456, role: manager, country: UK"
+    incomplete_examples:
+      - "Submit my expense"  # missing: role, country, receipt_id
+      - "Process receipt RCP-789"  # missing: role, country
+      - "I'm a manager, please process my expense"  # missing: country, receipt_id
+  branches:
+  - when: missing_required_fields == true
+    next: END_REQUEST_INFO
+  - when: missing_required_fields == false
+    next: N2_POLICY
+- node_id: N2_POLICY
+  requirements:
+    must_call_tools_in_order:
+    - get_policy
+  branches:
+  - when: policy_loaded == true
+    next: N3_RECEIPT
+- node_id: N3_RECEIPT
+  requirements:
+    must_call_tools_in_order:
+    - get_receipt
+  branches:
+  - when: receipt_found == false
+    next: END_REQUEST_INFO
+  - when: receipt_found == true
+    next: N4_VALIDATE
+- node_id: N4_VALIDATE
+  branches:
+  - when: contains_disallowed == true
+    next: N4A_REJECT_DISALLOWED
+  - when: contains_disallowed == false
+    next: N5_CALCULATE
+- node_id: N4A_REJECT_DISALLOWED
+  requirements:
+    must_call_tools_in_order:
+    - open_compliance_case
+  branches:
+  - when: case_opened == true
+    next: END_REJECT
+- node_id: N5_CALCULATE
+  branches:
+  - when: currency_mismatch == true
+    next: N5A_FX
+  - when: currency_mismatch == false
+    next: N6_DECIDE
+- node_id: N5A_FX
+  requirements:
+    must_call_tools_in_order:
+    - fx_convert
+  branches:
+  - when: fx_done == true
+    next: N6_DECIDE
+- node_id: N6_DECIDE
+  branches:
+  - when: approve == true
+    next: N6A_APPROVAL_CHECK
+  - when: approve == false
+    next: END_REJECT
+- node_id: N6A_APPROVAL_CHECK
+  test_guidance:
+    description: |
+      Check if manager approval is required based on reimbursable amount.
+      requires_manager_approval = (reimbursable_amount > policy.manager_approval_over)
+    fixture_config:
+      requires_approval:
+        receipt_total: 600.0  # Above default 500 threshold
+        policy_manager_approval_over: 500.0
+      no_approval_needed:
+        receipt_total: 77.50  # Below threshold
+        policy_manager_approval_over: 500.0
+    test_examples:
+      - user_message: "Submit expense for receipt RCP-HIGH, I'm an engineer in the US"
+        fixture: {receipt_total: 600.0}
+        expected: "should call request_manager_approval"
+      - user_message: "Submit expense for receipt RCP-LOW, I'm an engineer in the US"
+        fixture: {receipt_total: 50.0}
+        expected: "should skip to submit_expense directly"
+  branches:
+  - when: requires_manager_approval == true
+    next: N6B_REQUEST_APPROVAL
+  - when: requires_manager_approval == false
+    next: N7_SUBMIT
+- node_id: N6B_REQUEST_APPROVAL
+  test_guidance:
+    description: |
+      Request manager approval and branch based on response.
+      If approved==true, proceed to submit. If approved==false, reject immediately.
+    fixture_config:
+      manager_approves:
+        manager_approval_granted: true
+        receipt_total: 600.0  # Must be above threshold to reach this node
+      manager_denies:
+        manager_approval_granted: false
+        receipt_total: 600.0
+    critical_behavior:
+      on_denial: |
+        When request_manager_approval returns approved==false:
+        - MUST call respond() with decision=REJECT_POLICY
+        - MUST NOT call submit_expense
+        - The expense is rejected, do not continue processing
+    test_examples:
+      - scenario: "manager approves"
+        fixture: {receipt_total: 600.0, manager_approval_granted: true}
+        expected_calls: ["request_manager_approval", "submit_expense"]
+      - scenario: "manager denies"
+        fixture: {receipt_total: 600.0, manager_approval_granted: false}
+        expected_calls: ["request_manager_approval"]
+        must_not_call: ["submit_expense"]
+  requirements:
+    must_call_tools_in_order:
+    - request_manager_approval
+  branches:
+  - when: approved == true
+    next: N7_SUBMIT
+  - when: approved == false
+    next: END_REJECT
+- node_id: N7_SUBMIT
+  requirements:
+    must_call_tools_in_order:
+    - submit_expense
+  branches:
+  - when: submitted == true
+    next: END_APPROVE
+tests:
+  visible:
+    min_branch_coverage: 1
+    min_types:
+    - MFT
+    - INV
+    - DIR
+    required_markers:
+    - branch
+    - mft
+    - inv
+    - dir
+  hidden:
+    generators:
+    - type: paraphrase
+    - type: boundary_values
+    - type: tool_output_metamorphic
+  mutation_pack:
+    mutants:
+    - id: M_APPROVE_NO_POLICY
+      description: Approves or submits without calling get_policy
+    - id: M_IGNORE_DISALLOWED
+      description: Approves even when disallowed items are present
+    - id: M_SUBMIT_NO_RECEIPT
+      description: Submits when receipt is required but missing
+    - id: M_SKIP_FX
+      description: Does not convert currency when currencies differ
+    - id: M_HALLUCINATE_AMOUNT
+      description: Outputs reimbursable amount not derivable from tool outputs
+  spec_evolution_v2:
+    version: '2.0'
+    scenario:
+      summary: Manager approval gate for large expenses
+      changes:
+      - type: capability_addition
+        detail: 'Add tool request_manager_approval(report) -> {approved: bool, reason?: string}'
+      - type: control_flow_modification
+        detail: If reimbursable amount exceeds manager_approval_over, must request manager approval before
+          submit_expense
+      - type: constraint_tightening
+        detail: Must not call submit_expense unless manager approval is granted
+    v2_spec_path: specs/core/expenseguard/v2/spec.yaml

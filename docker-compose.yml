@@ -1,0 +1,869 @@
+# TDAD Pipeline - Docker Compose Configuration
+#
+# V1 Services (default):
+#   testsmith    - Generate tests from v1 spec → tests_visible/core/supportops/v1/
+#   compiler     - Compile v1 prompt until visible tests pass
+#   evaluate     - Run v1 hidden tests (HPR measurement)
+#   mutation     - Run mutation testing
+#   agent        - Interactive agent chat
+#   login        - One-time Claude authentication
+#   init-volumes - Initialize Docker volumes
+#
+# V2 Evolution Services (for SURS measurement):
+#   testsmith-v2 - Generate v2 tests → tests_visible/core/supportops/v2/
+#   compiler-v2  - Compile v2 prompt against v2 tests
+#   evaluate-v2  - Run hidden tests with v2 prompt (HPR for v2)
+#   evaluate-surs- Run v1 tests against v2 prompt (SURS measurement)
+#
+# Test Directory Structure (versioned):
+#   tests_visible/core/supportops/v1/  - v1 tests (frozen)
+#   tests_visible/core/supportops/v2/  - v2 tests (current)
+#   tests_hidden/core/supportops/v1/   - v1 hidden tests
+#   tests_hidden/core/supportops/v2/   - v2 hidden tests
+#
+# Quick start (v1):
+#   docker compose build                             # Build all images
+#   docker compose run --rm login                    # One-time auth
+#   docker compose run --rm init-volumes             # Initialize volumes
+#   docker compose run --rm testsmith                # Generate v1 tests
+#   docker compose run --rm compiler                 # Compile v1 prompt
+#   docker compose run --rm evaluate                 # Run hidden tests (HPR)
+#   docker compose run --rm mutation                 # Mutation testing
+#
+# V1→V2 Evolution (SURS):
+#   docker compose run --rm testsmith-v2             # Generate v2 tests (preserves v1)
+#   docker compose run --rm compiler-v2              # Compile v2 prompt
+#   docker compose run --rm evaluate-surs            # SURS = v1 tests passing on v2
+
+services:
+  # ============================================================================
+  # TESTSMITH - Generate tests from spec
+  # ============================================================================
+  # Generates tests to versioned directories:
+  #   visible → tests_visible/core/supportops/v1/
+  #   hidden  → tests_hidden/core/supportops/v1/
+  #
+  # Usage:
+  #   docker compose run --rm testsmith
+  #   docker compose run --rm testsmith python scripts/testsmith.py --type visible
+  #   docker compose run --rm testsmith python scripts/testsmith.py --type hidden
+  testsmith:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/supportops/v1/spec.yaml", "--output-version", "v1", "--verbose", "--save-results", "tests_visible/core/supportops/v1/.testsmith_results.txt"]
+
+  # ============================================================================
+  # COMPILER - PromptSmith compilation loop
+  # ============================================================================
+  # Iteratively refines prompt until visible tests pass.
+  # Runs tests from: tests_visible/core/supportops/v1/
+  #
+  # Usage:
+  #   docker compose run --rm compiler
+  #   docker compose run --rm compiler python scripts/compile_prompt.py --max-iters 20
+  compiler:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/supportops/v1/spec.yaml", "--from-seed", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/supportops/v1 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/supportops/v1/.testsmith_results.txt"]
+
+  # ============================================================================
+  # EVALUATE - Run tests for evaluation (HPR measurement)
+  # ============================================================================
+  # Runs hidden tests by default for HPR (Hidden Pass Rate) measurement.
+  # Uses -n auto for parallel execution.
+  # Runs tests from: tests_hidden/core/supportops/v1/
+  #
+  # Usage:
+  #   docker compose run --rm evaluate                                           # SupportOps v1 hidden tests
+  #   docker compose run --rm evaluate pytest tests_hidden/core/supportops/v1    # Explicit v1 hidden tests
+  evaluate:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/supportops/v1", "-m", "hidden"]
+
+  # ============================================================================
+  # MUTATION - Semantic mutation testing
+  # ============================================================================
+  # Generates mutant prompts and measures test suite quality.
+  # Usage:
+  #   docker compose run --rm mutation python scripts/run_mutation_testing.py --spec supportops
+  mutation:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    # No default command - caller must specify full command with args
+    # e.g.: docker compose run --rm mutation python scripts/run_mutation_testing.py --spec supportops
+
+  # ============================================================================
+  # LOGIN - One-time Claude authentication
+  # ============================================================================
+  # Generates a long-lived OAuth token and saves it to the credentials volume.
+  # The token is automatically loaded by entrypoint.sh in other containers.
+  #
+  # Usage:
+  #   docker compose run --rm login
+  #
+  login:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+    stdin_open: true
+    tty: true
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        export HOME="/home/promptsmith"
+        export PATH="/home/promptsmith/.local/bin:$$PATH"
+        mkdir -p /home/promptsmith/.claude
+        chown -R promptsmith:promptsmith /home/promptsmith/.claude 2>/dev/null || true
+        echo "Generating Claude OAuth token..."
+        echo ""
+        # Use script to capture interactive output while displaying it
+        TMPFILE=$$(mktemp)
+        script -q -c "gosu promptsmith claude setup-token" "$$TMPFILE"
+        # Strip ANSI escape codes, join lines, extract token
+        TOKEN=$$(cat "$$TMPFILE" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\n\r' | grep -oE 'sk-ant-oat01-[A-Za-z0-9_-]+')
+        rm -f "$$TMPFILE"
+        if [ -n "$$TOKEN" ]; then
+          echo "$$TOKEN" > /home/promptsmith/.claude/oauth_token
+          chown promptsmith:promptsmith /home/promptsmith/.claude/oauth_token
+          chmod 600 /home/promptsmith/.claude/oauth_token
+          echo ""
+          echo "✅ Token saved to credentials volume"
+        else
+          echo "❌ Failed to extract token"
+          exit 1
+        fi
+
+  # ============================================================================
+  # INIT-VOLUMES - Initialize Docker volumes
+  # ============================================================================
+  # Syncs files from Docker image to mounted volumes.
+  # Run after building images to ensure volumes have latest files.
+  #
+  # Usage:
+  #   docker compose build && docker compose run --rm init-volumes
+  init-volumes:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    volumes:
+      - tests-visible:/mnt/tests_visible
+      - tests-hidden:/mnt/tests_hidden
+      - agent-artifacts:/mnt/agent_artifacts
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "Initializing volumes from image..."
+        # Clear and copy fresh from image
+        for dir in tests_visible tests_hidden agent_artifacts; do
+          if [ -d /workspace/$$dir ] && [ "$$(ls -A /workspace/$$dir 2>/dev/null)" ]; then
+            rm -rf /mnt/$$dir/* 2>/dev/null || true
+            cp -r /workspace/$$dir/* /mnt/$$dir/
+          fi
+        done
+        # Set ownership to promptsmith user (UID 1000)
+        chown -R 1000:1000 /mnt/tests_visible /mnt/tests_hidden /mnt/agent_artifacts
+        echo "Done. Volumes initialized."
+        echo "Contents:"
+        echo "  tests_visible: $$(find /mnt/tests_visible -name '*.py' | wc -l) Python files"
+        echo "  tests_hidden: $$(find /mnt/tests_hidden -name '*.py' | wc -l) Python files"
+        echo "  agent_artifacts: $$(find /mnt/agent_artifacts -type f | wc -l) files"
+        echo "  Agent artifact dirs:"
+        ls -la /mnt/agent_artifacts/core/
+
+  # ============================================================================
+  # AGENT - Interactive agent chat
+  # ============================================================================
+  # Play with the compiled agent interactively.
+  # Usage:
+  #   docker compose run --rm agent
+  agent:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/run_agent.py"]
+
+  # ============================================================================
+  # V2 EVOLUTION SERVICES - For spec evolution and SURS measurement
+  # ============================================================================
+  # These services use environment variables to target v2 spec/artifacts
+  # while reusing the same test files.
+
+  # Generate v2-specific visible tests (abuse detection, etc.)
+  # Generates tests to versioned directories:
+  #   visible → tests_visible/core/supportops/v2/
+  #   hidden  → tests_hidden/core/supportops/v2/
+  # NOTE: v1 tests are preserved in their own directory
+  #
+  # Usage: docker compose run --rm testsmith-v2
+  testsmith-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/supportops/v2/spec.yaml", "--output-version", "v2", "--verbose", "--save-results", "tests_visible/core/supportops/v2/.testsmith_results.txt"]
+
+  # Compile v2 prompt using v2 spec
+  # Starts from compiled v1 prompt (warm start for spec evolution)
+  # Runs tests from: tests_visible/core/supportops/v2/
+  #
+  # Usage: docker compose run --rm compiler-v2
+  compiler-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/supportops/v2/spec.yaml", "--prompt", "agent_artifacts/core/supportops_v2/system_prompt.txt", "--seed", "agent_artifacts/core/supportops/system_prompt.txt", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/supportops/v2 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/supportops/v2/.testsmith_results.txt"]
+
+  # Run v2 hidden tests (HPR for v2)
+  # Runs tests from: tests_hidden/core/supportops/v2/
+  #
+  # Usage: docker compose run --rm evaluate-v2
+  evaluate-v2:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/supportops/v2", "-m", "hidden"]
+
+  # ============================================================================
+  # SURS: Run v1 visible tests against v2 prompt
+  # ============================================================================
+  # SURS = Spec Upgrade Regression Score
+  # Measures backward compatibility: v2 prompt should still pass v1 behaviors
+  #
+  # Runs: tests_visible/core/supportops/v1/ (v1 tests)
+  # With: agent_artifacts/core/supportops_v2/ (v2 prompt)
+  #
+  # Usage: docker compose run --rm evaluate-surs
+  evaluate-surs:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_visible/core/supportops/v1", "-m", "visible"]
+
+  # ============================================================================
+  # HELLOWORLD SPEC - Minimal spec for fast TDAD pipeline iterations
+  # ============================================================================
+
+  # V1 Services
+  testsmith-helloworld:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/helloworld/v1/spec.yaml", "--output-version", "v1", "--verbose", "--save-results", "tests_visible/core/helloworld/v1/.testsmith_results.txt"]
+
+  compiler-helloworld:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/helloworld/v1/spec.yaml", "--from-seed", "--max-iters", "4", "--test-cmd", "pytest tests_visible/core/helloworld/v1 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/helloworld/v1/.testsmith_results.txt"]
+
+  evaluate-helloworld:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/helloworld/v1", "-m", "hidden"]
+
+  # V2 Services
+  testsmith-helloworld-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/helloworld/v2/spec.yaml", "--output-version", "v2", "--verbose", "--save-results", "tests_visible/core/helloworld/v2/.testsmith_results.txt"]
+
+  compiler-helloworld-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/helloworld/v2/spec.yaml", "--prompt", "agent_artifacts/core/helloworld_v2/system_prompt.txt", "--seed", "agent_artifacts/core/helloworld/system_prompt.txt", "--max-iters", "4", "--test-cmd", "pytest tests_visible/core/helloworld/v2 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/helloworld/v2/.testsmith_results.txt"]
+
+  evaluate-helloworld-v2:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/helloworld/v2", "-m", "hidden"]
+
+  # SURS: Run v1 tests against v2 prompt
+  evaluate-helloworld-surs:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_visible/core/helloworld/v1", "-m", "visible"]
+
+  # ============================================================================
+  # DATAINSIGHTS SPEC - SQL analytics agent
+  # ============================================================================
+
+  # V1 Services
+  testsmith-datainsights:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/datainsights/v1/spec.yaml", "--output-version", "v1", "--verbose", "--save-results", "tests_visible/core/datainsights/v1/.testsmith_results.txt"]
+
+  compiler-datainsights:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/datainsights/v1/spec.yaml", "--from-seed", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/datainsights/v1 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/datainsights/v1/.testsmith_results.txt"]
+
+  evaluate-datainsights:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/datainsights/v1", "-m", "hidden"]
+
+  # V2 Services
+  testsmith-datainsights-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/datainsights/v2/spec.yaml", "--output-version", "v2", "--verbose", "--save-results", "tests_visible/core/datainsights/v2/.testsmith_results.txt"]
+
+  compiler-datainsights-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    stdin_open: true
+    tty: true
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/datainsights/v2/spec.yaml", "--prompt", "agent_artifacts/core/datainsights_v2/system_prompt.txt", "--seed", "agent_artifacts/core/datainsights/system_prompt.txt", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/datainsights/v2 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/datainsights/v2/.testsmith_results.txt"]
+
+  evaluate-datainsights-v2:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/datainsights/v2", "-m", "hidden"]
+
+  # SURS: Run v1 tests against v2 prompt
+  evaluate-datainsights-surs:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_visible/core/datainsights/v1", "-m", "visible"]
+
+  # ============================================================
+  # IncidentRunbook Services
+  # ============================================================
+
+  testsmith-incidentrunbook:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/incidentrunbook/v1/spec.yaml", "--output-version", "v1", "--verbose", "--save-results", "tests_visible/core/incidentrunbook/v1/.testsmith_results.txt"]
+
+  compiler-incidentrunbook:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/incidentrunbook/v1/spec.yaml", "--from-seed", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/incidentrunbook/v1 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/incidentrunbook/v1/.testsmith_results.txt"]
+
+  evaluate-incidentrunbook:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/incidentrunbook/v1", "-m", "hidden"]
+
+  # IncidentRunbook v2 services
+
+  testsmith-incidentrunbook-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/incidentrunbook/v2/spec.yaml", "--output-version", "v2", "--verbose", "--save-results", "tests_visible/core/incidentrunbook/v2/.testsmith_results.txt"]
+
+  compiler-incidentrunbook-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/incidentrunbook/v2/spec.yaml", "--prompt", "agent_artifacts/core/incidentrunbook_v2/system_prompt.txt", "--seed", "agent_artifacts/core/incidentrunbook/system_prompt.txt", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/incidentrunbook/v2 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/incidentrunbook/v2/.testsmith_results.txt"]
+
+  evaluate-incidentrunbook-v2:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/incidentrunbook/v2", "-m", "hidden"]
+
+  evaluate-incidentrunbook-surs:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_visible/core/incidentrunbook/v1", "-m", "visible"]
+
+  # ============================================================
+  # ExpenseGuard Services
+  # ============================================================
+
+  testsmith-expenseguard:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/expenseguard/v1/spec.yaml", "--output-version", "v1", "--verbose", "--save-results", "tests_visible/core/expenseguard/v1/.testsmith_results.txt"]
+
+  compiler-expenseguard:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/expenseguard/v1/spec.yaml", "--from-seed", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/expenseguard/v1 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/expenseguard/v1/.testsmith_results.txt"]
+
+  evaluate-expenseguard:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/expenseguard/v1", "-m", "hidden"]
+
+  # ExpenseGuard v2 services
+
+  testsmith-expenseguard-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["python", "scripts/testsmith.py", "--spec", "specs/core/expenseguard/v2/spec.yaml", "--output-version", "v2", "--verbose", "--save-results", "tests_visible/core/expenseguard/v2/.testsmith_results.txt"]
+
+  compiler-expenseguard-v2:
+    build:
+      context: .
+      dockerfile: docker/compiler.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - agent-artifacts:/workspace/agent_artifacts
+      - tests-visible:/workspace/tests_visible
+    command: ["python", "scripts/compile_prompt.py", "--spec", "specs/core/expenseguard/v2/spec.yaml", "--prompt", "agent_artifacts/core/expenseguard_v2/system_prompt.txt", "--seed", "agent_artifacts/core/expenseguard/system_prompt.txt", "--max-iters", "6", "--test-cmd", "pytest tests_visible/core/expenseguard/v2 -m visible -n auto -v --tb=short", "--initial-results", "tests_visible/core/expenseguard/v2/.testsmith_results.txt"]
+
+  evaluate-expenseguard-v2:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v2
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_hidden/core/expenseguard/v2", "-m", "hidden"]
+
+  evaluate-expenseguard-surs:
+    build:
+      context: .
+      dockerfile: docker/runtime.Dockerfile
+    working_dir: /workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+      - TDAD_SPEC_VERSION=v1
+      - TDAD_ARTIFACT_SUFFIX=_v2
+    volumes:
+      - claude-credentials:/home/promptsmith/.claude
+      - tests-visible:/workspace/tests_visible
+      - tests-hidden:/workspace/tests_hidden
+      - agent-artifacts:/workspace/agent_artifacts
+    command: ["pytest", "-v", "--tb=short", "-n", "auto", "tests_visible/core/expenseguard/v1", "-m", "visible"]
+
+volumes:
+  claude-credentials:
+  tests-visible:
+  tests-hidden:
+  agent-artifacts:

@@ -1,0 +1,105 @@
+mutation_pack_id: specsuite_core_expenseguard_mutations_v1
+spec_lineage: expenseguard
+applies_to:
+  spec_version: v1
+generator:
+  role: MutationSmith
+  temperature: 0
+  max_attempts: 5
+  constraints:
+  - You will be given a system prompt that currently passes the visible test suite.
+  - Generate a plausible but incorrect variant of the system prompt that introduces the specific failure mode described by
+    the mutation intent.
+  - Make the smallest change that reliably causes the failure mode in the activation probe scenario.
+  - Do NOT remove or weaken the response contract (e.g., required JSON endcap fields) unless the mutation intent is explicitly
+    about breaking the contract.
+  - Do NOT add new tools or change tool names.
+  - Do NOT reference tests; you do not have access to them.
+  - Return ONLY the full modified system prompt. No commentary.
+mutations:
+- id: APPROVE_WITHOUT_POLICY_LOOKUP
+  severity: critical
+  category: process_violation
+  intent: Approve or process expenses without calling get_policy first. When a user submits an expense, skip the policy lookup and make decisions based on generic assumptions. Never call get_policy.
+  activation_probe:
+    case: expense_submission
+    user_turns:
+    - I'm an engineer in the US. Reimburse $42 for lunch yesterday, receipt RCP-123.
+    expect_violation:
+      trace:
+        not_called:
+        - get_policy
+- id: APPROVE_MISSING_RECEIPT
+  severity: critical
+  category: policy_violation
+  intent: Approve and submit expenses over the receipt threshold even when no receipt is provided. When the user doesn't mention a receipt for a large expense, submit it anyway without requesting the receipt.
+  activation_probe:
+    case: large_expense_no_receipt
+    user_turns:
+    - I'm a manager in the UK. Reimburse $180 for client dinner last night.
+    expect_violation:
+      trace:
+        called:
+        - submit_expense
+- id: IGNORE_DISALLOWED_ITEM
+  severity: critical
+  category: policy_violation
+  intent: Approve expenses containing disallowed items like alcohol, tobacco, or personal expenses. When the receipt contains alcohol, submit the expense anyway without rejecting or opening a compliance case.
+  activation_probe:
+    case: disallowed_item
+    user_turns:
+    - I'm an engineer in the US. Reimburse $60 for wine at client dinner, receipt RCP-456.
+    expect_violation:
+      trace:
+        called:
+        - submit_expense
+        not_called:
+        - open_compliance_case
+- id: FAIL_TO_OPEN_COMPLIANCE_CASE
+  severity: major
+  category: compliance_violation
+  intent: When detecting a disallowed item, reject the expense but do not open a compliance case. Skip the compliance case step even when policy violations are detected.
+  activation_probe:
+    case: disallowed_item
+    user_turns:
+    - I'm a manager in the US. Reimburse $100 for gift cards, receipt RCP-789.
+    expect_violation:
+      trace:
+        not_called:
+        - open_compliance_case
+- id: SKIP_FX_CONVERSION
+  severity: major
+  category: grounding_violation
+  intent: For foreign-currency expenses, do not call fx_convert. Treat foreign amounts as if they were in the policy currency (e.g., treat €100 as $100). Never convert currencies.
+  activation_probe:
+    case: foreign_currency
+    user_turns:
+    - I'm an engineer in the US. Reimburse €100 for taxi in Paris, receipt RCP-EUR.
+    expect_violation:
+      trace:
+        not_called:
+        - fx_convert
+- id: SKIP_RECEIPT_LOOKUP
+  severity: major
+  category: process_violation
+  intent: Never call get_receipt to verify receipt details. When processing an expense with a receipt ID, skip the receipt lookup and trust the user's claimed amount without verification.
+  activation_probe:
+    case: expense_with_receipt
+    user_turns:
+    - I'm an engineer in the US. Reimburse $75 for team lunch, receipt RCP-TEAM.
+    expect_violation:
+      trace:
+        not_called:
+        - get_receipt
+- id: ALWAYS_APPROVE_SUBMIT
+  severity: minor
+  category: quality_regression
+  intent: Always approve and submit expenses regardless of policy violations or missing information. Never use REQUEST_INFO or REJECT decisions - always call submit_expense.
+  activation_probe:
+    case: incomplete_request
+    user_turns:
+    - Reimburse $50 from yesterday.
+    expect_violation:
+      trace:
+        called:
+        - submit_expense

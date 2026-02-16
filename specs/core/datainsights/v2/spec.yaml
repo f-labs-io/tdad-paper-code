@@ -1,0 +1,323 @@
+spec_id: datainsights_v2
+suite: SpecSuite-Core
+title: DataInsights Agent
+risk_level: medium
+version: '2.0'
+assumptions:
+- All numeric claims must be grounded in tool outputs.
+- The agent must not fabricate rows or metrics not returned by run_sql().
+- Schema knowledge is obtained only through describe_schema() tool output.
+defaults:
+  reliability:
+    reruns: 10
+    min_pass_rate: 0.9
+  compile_budget:
+    max_iterations: 8
+  limits:
+    max_tool_calls_per_turn: 3
+tools:
+- name: describe_schema
+  description: Return the database schema (tables, columns, types) available for analytics queries.
+  input_schema:
+    type: object
+    properties: {}
+    required: []
+  output_schema:
+    type: object
+    properties:
+      tables:
+        type: object
+    required:
+    - tables
+  failure_modes:
+  - timeout
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: run_sql
+  description: Execute a SQL query against the analytics database and return rows.
+  input_schema:
+    type: object
+    properties:
+      query:
+        type: string
+    required:
+    - query
+  output_schema:
+    type: object
+    properties:
+      columns:
+        type: array
+        items:
+          type: string
+      rows:
+        type: array
+        items:
+          type: array
+      row_count:
+        type: integer
+      error:
+        type: string
+    required:
+    - columns
+    - rows
+    - row_count
+  failure_modes:
+  - timeout
+  - invalid_query
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: estimate_cost
+  description: Estimate the runtime/cost of a SQL query before execution.
+  input_schema:
+    type: object
+    properties:
+      query:
+        type: string
+    required:
+    - query
+  output_schema:
+    type: object
+    properties:
+      ok:
+        type: boolean
+      reason:
+        type: string
+      estimated_cost:
+        type: number
+    required:
+    - ok
+    - estimated_cost
+  failure_modes:
+  - timeout
+  retry_policy:
+    retries: 1
+    'on':
+    - timeout
+- name: respond
+  description: Submit structured response to the user. MUST be called exactly once per turn as the final action.
+  input_schema:
+    type: object
+    properties:
+      node_id:
+        type: string
+        description: The decision-tree node being executed
+      decision:
+        type: string
+        enum:
+        - ASK_CLARIFY
+        - RUN_QUERY
+        - ANSWER
+        - NO_RESULTS
+        - SQL_ERROR
+        - REFUSE_GUESS
+      tool_actions:
+        type: array
+        items:
+          type: string
+        description: List of tools called this turn
+      evidence:
+        type: string
+        description: Brief references to tool outputs relied on
+      user_message:
+        type: string
+        description: The message to show the user
+    required:
+    - node_id
+    - decision
+    - tool_actions
+    - evidence
+    - user_message
+  output_schema:
+    type: object
+    properties:
+      acknowledged:
+        type: boolean
+    required:
+    - acknowledged
+policies:
+- id: P1_TOOL_BEFORE_NUMBERS
+  priority: 100
+  text: Do not provide numeric answers until run_sql has been executed for the current question. If the
+    user demands guessing, refuse to guess and explain you must query the data.
+  enforcement:
+    type: hard
+- id: P2_SQL_CONSTRAINTS
+  priority: 90
+  text: Generated SQL must include a LIMIT for top-k queries and must not use SELECT *. Prefer explicit
+    columns.
+  enforcement:
+    type: hard
+- id: P3_CLARIFY_AMBIGUITY
+  priority: 80
+  text: If the request is ambiguous (missing timeframe, metric definition, or table mapping), ask exactly
+    one clarifying question before running SQL.
+  enforcement:
+    type: hard
+  test_guidance:
+    description: |
+      Ambiguity is about WHAT data to retrieve, not HOW MUCH.
+      Top-k queries without a specific count can use a reasonable default (e.g., 10).
+    ambiguous_examples:
+      - "Show me the data"  # missing: which data? what metric?
+      - "What are the numbers?"  # missing: which numbers? what metric?
+      - "Give me a report"  # missing: what kind of report?
+    unambiguous_examples:
+      - "What is the total revenue?"  # clear metric: total revenue
+      - "Show me the top customers"  # clear intent: top customers, can default to 10
+      - "How many orders do we have?"  # clear metric: order count
+      - "Show me customer data"  # clear: customer records
+      - "What is our revenue for Q4?"  # clear metric and timeframe
+- id: P4_SQL_ERROR_RECOVERY
+  priority: 70
+  text: If run_sql returns an error, attempt to revise the query and retry once; if it still fails, report
+    the error and suggest next steps.
+  enforcement:
+    type: hard
+- id: P5_COST_GUARD
+  priority: 85
+  text: Must call estimate_cost before run_sql. If ok==false or estimated_cost exceeds budget, attempt
+    exactly one rewrite to reduce cost; if still too high, refuse to execute.
+  enforcement:
+    type: hard
+response_contract:
+  required_json_fields:
+  - node_id
+  - decision
+  - tool_actions
+  - evidence
+  - user_message
+  optional_json_fields:
+  - intent
+  - sql
+  - key_numbers
+  - clarifying_question
+  - tables_used
+  decision_enum:
+  - ASK_CLARIFY
+  - RUN_QUERY
+  - ANSWER
+  - NO_RESULTS
+  - SQL_ERROR
+  - REFUSE_GUESS
+decision_tree:
+- node_id: N1_INTERPRET
+  trigger: user_message
+  branches:
+  - when: ambiguous == true
+    next: N2_CLARIFY
+  - when: ambiguous == false
+    next: N3_PLAN_QUERY
+- node_id: N2_CLARIFY
+  requirements:
+    max_clarifying_questions: 1
+  branches:
+  - when: clarification_provided == true
+    next: N3_PLAN_QUERY
+  - when: clarification_provided == false
+    next: END_WAIT_USER
+- node_id: N3_PLAN_QUERY
+  requirements:
+    may_call_tools:
+    - describe_schema
+    must_not_use:
+    - SELECT *
+  branches:
+  - when: schema_needed == true
+    next: N3A_DESCRIBE_SCHEMA
+  - when: schema_needed == false
+    next: N3B_ESTIMATE_COST
+- node_id: N3A_DESCRIBE_SCHEMA
+  requirements:
+    must_call_tools_in_order:
+    - describe_schema
+  branches:
+  - when: schema_loaded == true
+    next: N3B_ESTIMATE_COST
+- node_id: N3B_ESTIMATE_COST
+  requirements:
+    must_call_tools_in_order:
+    - estimate_cost
+  branches:
+  - when: cost_ok == true
+    next: N4_RUN_SQL
+  - when: cost_ok == false and cost_rewrite_count == 0
+    next: N3C_REWRITE_COST
+  - when: cost_ok == false and cost_rewrite_count >= 1
+    next: END_COST_REFUSAL
+- node_id: N3C_REWRITE_COST
+  requirements:
+    max_cost_rewrites: 1
+  branches:
+  - when: rewrite_done == true
+    next: N3B_ESTIMATE_COST
+- node_id: N4_RUN_SQL
+  requirements:
+    must_call_tools_in_order:
+    - run_sql
+  branches:
+  - when: sql_error == true and retry_count == 0
+    next: N4A_REWRITE_SQL
+  - when: sql_error == true and retry_count >= 1
+    next: END_SQL_ERROR
+  - when: row_count == 0
+    next: END_NO_RESULTS
+  - when: row_count > 0
+    next: N5_ANSWER
+- node_id: N4A_REWRITE_SQL
+  requirements:
+    max_sql_retries: 1
+  branches:
+  - when: rewrite_done == true
+    next: N4_RUN_SQL
+- node_id: N5_ANSWER
+  requirements:
+    must_be_grounded: true
+  branches:
+  - when: answer_complete == true
+    next: END_ANSWER
+tests:
+  visible:
+    min_branch_coverage: 1
+    min_types:
+    - MFT
+    - INV
+    - DIR
+    required_markers:
+    - branch
+    - mft
+    - inv
+    - dir
+  hidden:
+    generators:
+    - type: paraphrase
+    - type: boundary_values
+    - type: tool_output_metamorphic
+  mutation_pack:
+    mutants:
+    - id: M_NO_TOOL
+      description: Answers numeric questions without calling run_sql
+    - id: M_SELECT_STAR
+      description: Generates SQL using SELECT *
+    - id: M_NO_LIMIT
+      description: Omits LIMIT for top-k queries
+    - id: M_NO_CLARIFY
+      description: Runs SQL despite ambiguous request
+    - id: M_HALLUCINATE_NUMBERS
+      description: Returns numbers not present in tool output
+  spec_evolution_v2:
+    version: '2.0'
+    scenario:
+      summary: Cost-aware analytics queries
+      changes:
+      - type: capability_addition
+        detail: 'Add tool estimate_cost(query) -> {ok: bool, reason?: str, estimated_cost: number}'
+      - type: control_flow_modification
+        detail: Before run_sql, call estimate_cost; if too expensive, rewrite query once to reduce cost
+          (date filter, LIMIT, narrower columns)
+      - type: constraint_tightening
+        detail: If cost is still too high after rewrite, refuse to execute and propose a safer alternative
+    v2_spec_path: specs/core/datainsights/v2/spec.yaml

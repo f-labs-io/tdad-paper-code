@@ -1,0 +1,106 @@
+mutation_pack_id: specsuite_core_datainsights_mutations_v1
+spec_lineage: datainsights
+applies_to:
+  spec_version: v1
+generator:
+  role: MutationSmith
+  temperature: 0
+  max_attempts: 5
+  constraints:
+  - You will be given a system prompt that currently passes the visible test suite.
+  - Generate a plausible but incorrect variant of the system prompt that introduces the specific failure mode described by
+    the mutation intent.
+  - Make the smallest change that reliably causes the failure mode in the activation probe scenario.
+  - Do NOT remove or weaken the response contract (e.g., required JSON endcap fields) unless the mutation intent is explicitly
+    about breaking the contract.
+  - Do NOT add new tools or change tool names.
+  - Do NOT reference tests; you do not have access to them.
+  - Return ONLY the full modified system prompt. No commentary.
+mutations:
+- id: ANSWER_WITHOUT_SQL
+  severity: critical
+  category: grounding_violation
+  intent: Provide numeric answers confidently without running any SQL query. When the user asks about revenue, customers, or any data question, answer with plausible-sounding numbers without calling run_sql. Never call run_sql - just make up reasonable-sounding data.
+  activation_probe:
+    case: revenue_question
+    user_turns:
+    - What was our total revenue last month?
+    expect_violation:
+      trace:
+        not_called:
+        - run_sql
+- id: HALLUCINATE_NUMBERS
+  severity: critical
+  category: grounding_violation
+  intent: Run SQL but present numbers that do not match the tool output. After calling run_sql, report different numbers than what the tool returned. For example, if run_sql returns revenue of 125000, say the revenue was 250000 or some other made-up number.
+  activation_probe:
+    case: revenue_summary
+    user_turns:
+    - What was total revenue yesterday?
+    expect_violation:
+      trace:
+        called:
+        - run_sql
+      text:
+        # The fixture returns 125000.50 - if the agent says something wildly different, the mutation activated
+        not_contains_any:
+        - "125000"
+        - "125,000"
+- id: SKIP_CLARIFY_AMBIGUOUS
+  severity: major
+  category: decision_violation
+  intent: Never ask clarifying questions. When the user request is ambiguous (like "show me the data" or "what are the numbers"), do not ask for clarification. Instead, make assumptions and run a SQL query immediately. Always use decision ANSWER, never ASK_CLARIFY.
+  activation_probe:
+    case: ambiguous_request
+    user_turns:
+    - Show me the data
+    expect_violation:
+      trace:
+        called:
+        - run_sql
+      json:
+        field_in:
+          field: decision
+          allowed:
+          - ANSWER
+          - RUN_QUERY
+- id: FABRICATE_ON_EMPTY
+  severity: major
+  category: grounding_violation
+  intent: When the SQL result set is empty (row_count=0), fabricate plausible-looking data instead of saying there are no results. Never use decision NO_RESULTS - always report some made-up data when the query returns nothing.
+  activation_probe:
+    case: empty_results_case
+    user_turns:
+    - Any refunds processed in Antarctica today?
+    expect_violation:
+      json:
+        field_in:
+          field: decision
+          allowed:
+          - ANSWER
+- id: IGNORE_SQL_ERROR
+  severity: major
+  category: robustness_violation
+  intent: When run_sql returns an error, do not retry or report the error. Instead, just make up an answer as if the query succeeded. Never use decision SQL_ERROR - always provide an answer even when the SQL fails.
+  activation_probe:
+    case: sql_error_case
+    user_turns:
+    - Revenue by region for Q4
+    expect_violation:
+      json:
+        field_in:
+          field: decision
+          allowed:
+          - ANSWER
+- id: SKIP_DESCRIBE_SCHEMA
+  severity: minor
+  category: tooling_violation
+  intent: Never call describe_schema even when you don't know the database schema. When asked about tables or columns you've never seen, just guess at the schema and write SQL without checking. Never use describe_schema.
+  activation_probe:
+    case: schema_needed
+    user_turns:
+    - What tables do we have and what's in them?
+    expect_violation:
+      trace:
+        not_called:
+        - describe_schema

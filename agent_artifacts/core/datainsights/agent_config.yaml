@@ -1,0 +1,7 @@
+model: claude-sonnet-4-5-20250929
+temperature: 0.2
+max_tokens: 800
+allowed_tools:
+- describe_schema
+- run_sql
+- respond

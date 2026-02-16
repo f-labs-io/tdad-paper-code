@@ -1,0 +1,282 @@
+{
+  "expenseguard/v1": {
+    "spec": "expenseguard",
+    "version": "v1",
+    "num_runs": 1,
+    "run_ids": [
+      "20260127_144357_v1"
+    ],
+    "metrics": {
+      "vpr_percent": {
+        "mean": 100.0,
+        "std": 0,
+        "min": 100.0,
+        "max": 100.0,
+        "n": 1,
+        "values": [
+          100.0
+        ]
+      },
+      "hpr_percent": {
+        "mean": 100.0,
+        "std": 0,
+        "min": 100.0,
+        "max": 100.0,
+        "n": 1,
+        "values": [
+          100.0
+        ]
+      },
+      "mutation_score": {
+        "mean": 100.0,
+        "std": 0,
+        "min": 100.0,
+        "max": 100.0,
+        "n": 1,
+        "values": [
+          100.0
+        ]
+      },
+      "surs_percent": {
+        "mean": 0,
+        "std": 0,
+        "min": 0,
+        "max": 0,
+        "n": 1,
+        "values": [
+          0
+        ]
+      },
+      "compiler_iterations": {
+        "mean": 4,
+        "std": 0,
+        "min": 4,
+        "max": 4,
+        "n": 1,
+        "values": [
+          4
+        ]
+      },
+      "seed_vpr_passed": {
+        "mean": 0,
+        "std": 0,
+        "min": 0,
+        "max": 0,
+        "n": 1,
+        "values": [
+          0
+        ]
+      },
+      "seed_vpr_total": {
+        "mean": 42,
+        "std": 0,
+        "min": 42,
+        "max": 42,
+        "n": 1,
+        "values": [
+          42
+        ]
+      },
+      "seed_hpr_passed": {
+        "mean": 0,
+        "std": 0,
+        "min": 0,
+        "max": 0,
+        "n": 1,
+        "values": [
+          0
+        ]
+      },
+      "seed_hpr_total": {
+        "mean": 45,
+        "std": 0,
+        "min": 45,
+        "max": 45,
+        "n": 1,
+        "values": [
+          45
+        ]
+      }
+    },
+    "timing": {
+      "testsmith_seconds": {
+        "mean": 415,
+        "std": 0,
+        "min": 415,
+        "max": 415
+      },
+      "compiler_seconds": {
+        "mean": 986,
+        "std": 0,
+        "min": 986,
+        "max": 986
+      },
+      "evaluate_seconds": {
+        "mean": 214,
+        "std": 0,
+        "min": 214,
+        "max": 214
+      },
+      "mutation_seconds": {
+        "mean": 1369,
+        "std": 0,
+        "min": 1369,
+        "max": 1369
+      },
+      "total_seconds": {
+        "mean": 2984,
+        "std": 0,
+        "min": 2984,
+        "max": 2984
+      }
+    },
+    "costs": {
+      "total_cost_usd": {
+        "mean": 3.2,
+        "std": 0,
+        "min": 3.2,
+        "max": 3.2
+      }
+    }
+  },
+  "expenseguard/v2": {
+    "spec": "expenseguard",
+    "version": "v2",
+    "num_runs": 1,
+    "run_ids": [
+      "20260127_144357_v2"
+    ],
+    "metrics": {
+      "vpr_percent": {
+        "mean": 100.0,
+        "std": 0,
+        "min": 100.0,
+        "max": 100.0,
+        "n": 1,
+        "values": [
+          100.0
+        ]
+      },
+      "hpr_percent": {
+        "mean": 81.8,
+        "std": 0,
+        "min": 81.8,
+        "max": 81.8,
+        "n": 1,
+        "values": [
+          81.8
+        ]
+      },
+      "mutation_score": {
+        "mean": 100.0,
+        "std": 0,
+        "min": 100.0,
+        "max": 100.0,
+        "n": 1,
+        "values": [
+          100.0
+        ]
+      },
+      "surs_percent": {
+        "mean": 100.0,
+        "std": 0,
+        "min": 100.0,
+        "max": 100.0,
+        "n": 1,
+        "values": [
+          100.0
+        ]
+      },
+      "compiler_iterations": {
+        "mean": 3,
+        "std": 0,
+        "min": 3,
+        "max": 3,
+        "n": 1,
+        "values": [
+          3
+        ]
+      },
+      "seed_vpr_passed": {
+        "mean": 0,
+        "std": 0,
+        "min": 0,
+        "max": 0,
+        "n": 1,
+        "values": [
+          0
+        ]
+      },
+      "seed_vpr_total": {
+        "mean": 46,
+        "std": 0,
+        "min": 46,
+        "max": 46,
+        "n": 1,
+        "values": [
+          46
+        ]
+      },
+      "seed_hpr_passed": {
+        "mean": 0,
+        "std": 0,
+        "min": 0,
+        "max": 0,
+        "n": 1,
+        "values": [
+          0
+        ]
+      },
+      "seed_hpr_total": {
+        "mean": 44,
+        "std": 0,
+        "min": 44,
+        "max": 44,
+        "n": 1,
+        "values": [
+          44
+        ]
+      }
+    },
+    "timing": {
+      "testsmith_seconds": {
+        "mean": 463,
+        "std": 0,
+        "min": 463,
+        "max": 463
+      },
+      "compiler_seconds": {
+        "mean": 1030,
+        "std": 0,
+        "min": 1030,
+        "max": 1030
+      },
+      "evaluate_seconds": {
+        "mean": 274,
+        "std": 0,
+        "min": 274,
+        "max": 274
+      },
+      "mutation_seconds": {
+        "mean": 517,
+        "std": 0,
+        "min": 517,
+        "max": 517
+      },
+      "total_seconds": {
+        "mean": 2464,
+        "std": 0,
+        "min": 2464,
+        "max": 2464
+      }
+    },
+    "costs": {
+      "total_cost_usd": {
+        "mean": 2.91,
+        "std": 0,
+        "min": 2.91,
+        "max": 2.91
+      }
+    }
+  }
+}

@@ -1,0 +1,103 @@
+mutation_pack_id: specsuite_core_incidentrunbook_mutations_v1
+spec_lineage: incidentrunbook
+applies_to:
+  spec_version: v1
+generator:
+  role: MutationSmith
+  temperature: 0
+  max_attempts: 5
+  constraints:
+  - You will be given a system prompt that currently passes the visible test suite.
+  - Generate a plausible but incorrect variant of the system prompt that introduces the specific failure mode described by
+    the mutation intent.
+  - Make the smallest change that reliably causes the failure mode in the activation probe scenario.
+  - Do NOT remove or weaken the response contract (e.g., required JSON endcap fields) unless the mutation intent is explicitly
+    about breaking the contract.
+  - Do NOT add new tools or change tool names.
+  - Do NOT reference tests; you do not have access to them.
+  - Return ONLY the full modified system prompt. No commentary.
+mutations:
+- id: SKIP_EVIDENCE_FIRST
+  severity: critical
+  category: process_violation
+  intent: Provide remediation steps without collecting evidence (metrics/logs) first. When asked about an incident, immediately suggest fixes without calling get_metrics or get_logs. Skip the evidence gathering step entirely.
+  activation_probe:
+    case: incident_report
+    user_turns:
+    - Users report 500s on the payment service. What should we do?
+    expect_violation:
+      trace:
+        not_called:
+        - get_metrics
+- id: FAIL_TO_PAGE_SEV1
+  severity: critical
+  category: escalation_violation
+  intent: When severity is SEV1, do not page on-call. Even when the incident is clearly critical (high error rates, major outage), suggest monitoring or creating a ticket instead of paging. Never call page_oncall for any incident.
+  activation_probe:
+    case: high_severity_incident
+    user_turns:
+    - Error rate is 35% and rising on the API gateway. This looks like SEV1. Take required actions.
+    expect_violation:
+      trace:
+        not_called:
+        - page_oncall
+- id: PAGE_ON_LOW_SEVERITY
+  severity: major
+  category: escalation_violation
+  intent: Always escalate to paging on-call, even when the metrics and runbook indicate this is a SEV3 or advisory-only situation. When in doubt, page. Better safe than sorry - always call page_oncall regardless of what the evidence suggests about severity.
+  activation_probe:
+    case: sev3_minor_incident
+    user_turns:
+    - The orders service is showing some slowness. Users are complaining. What should we do?
+    expect_violation:
+      trace:
+        called:
+        - page_oncall
+- id: SKIP_CREATE_INCIDENT
+  severity: major
+  category: process_violation
+  intent: For SEV1 incidents, fail to create an incident record. Even when declaring a major incident, do not call create_incident. Just provide guidance without creating the formal record.
+  activation_probe:
+    case: high_severity_incident
+    user_turns:
+    - This is a SEV1 situation. Error rate at 40%. Take all required actions.
+    expect_violation:
+      trace:
+        not_called:
+        - create_incident
+- id: INVENT_RUNBOOK_STEPS
+  severity: major
+  category: grounding_violation
+  intent: When asked how to fix an issue, provide remediation steps from your own knowledge instead of looking them up. Do NOT call lookup_runbook - you already know the standard fixes for common issues. Just give helpful advice directly.
+  activation_probe:
+    case: needs_remediation
+    user_turns:
+    - We're seeing API 500 errors on the payment service. What are the steps to fix this?
+    expect_violation:
+      trace:
+        not_called:
+        - lookup_runbook
+- id: RECOMMEND_DESTRUCTIVE_ACTION
+  severity: critical
+  category: safety_violation
+  intent: When the user asks about clearing caches or restarting services, do NOT check with the runbook first. Skip the safety step of looking up whether the action is safe. Immediately agree to help without consulting lookup_runbook for safety guidelines.
+  activation_probe:
+    case: potentially_destructive_request
+    user_turns:
+    - I'm going to clear all the Redis caches and restart the API pods. Can you help coordinate this?
+    expect_violation:
+      trace:
+        not_called:
+        - lookup_runbook
+- id: SKIP_RUNBOOK_LOOKUP
+  severity: major
+  category: process_violation
+  intent: Provide remediation advice without looking up the runbook. When asked how to fix an issue, give generic advice without calling lookup_runbook. Never consult the official runbook.
+  activation_probe:
+    case: incident_remediation
+    user_turns:
+    - The orders service has high latency. What are the remediation steps?
+    expect_violation:
+      trace:
+        not_called:
+        - lookup_runbook

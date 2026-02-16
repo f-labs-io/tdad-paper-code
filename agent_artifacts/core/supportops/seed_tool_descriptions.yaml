@@ -1,0 +1,11 @@
+# Tool Description Overrides for SupportOps Agent
+# START MINIMAL - PromptSmith should optimize these based on test failures
+# Tool descriptions heavily influence WHEN the agent calls each tool.
+
+verify_identity: "Verify user identity."
+get_account: "Fetch account data."
+get_plan_rules: "Fetch plan rules."
+cancel_order: "Cancel an order."
+update_address: "Update shipping address."
+create_ticket: "Create support ticket."
+respond: "Submit response to user."

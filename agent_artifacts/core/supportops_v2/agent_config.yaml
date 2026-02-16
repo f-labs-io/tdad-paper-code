@@ -1,0 +1,12 @@
+model: claude-sonnet-4-5-20250929
+temperature: 0.2
+max_tokens: 800
+allowed_tools:
+- flag_abuse
+- verify_identity
+- get_account
+- get_plan_rules
+- cancel_order
+- update_address
+- create_ticket
+- respond

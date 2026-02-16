@@ -1,0 +1,10 @@
+model: claude-sonnet-4-5-20250929
+temperature: 0.2
+max_tokens: 800
+allowed_tools:
+- get_policy
+- get_receipt
+- fx_convert
+- submit_expense
+- open_compliance_case
+- respond

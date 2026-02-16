@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tdad-poc-supportops"
+version = "0.0.1"
+description = "TDAD PoC scaffold: SpecSuite-Core SupportOps spec, tests, and mutation packs"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+  "pytest>=7.0",
+  "pytest-xdist>=3.5.0",
+  "pytest-asyncio>=0.23.0",
+  "claude-agent-sdk>=0.1.12",
+  "anthropic>=0.40.0",
+  "ruff>=0.4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["tdadlib*"]
+
+[tool.pytest.ini_options]
+markers = [
+    # Visibility markers (compile-time vs held-out)
+    "visible: tests used during PromptSmith compilation",
+    "hidden: tests held out for HPR measurement (not seen by PromptSmith)",
+
+    # Test type markers (from CheckList taxonomy)
+    "mft: Minimum Functionality Test - basic capability verification",
+    "inv: Invariance Test - robustness to irrelevant perturbations",
+    "dir: Directional Test - relevant changes produce expected output changes",
+
+    # Hidden test type markers
+    "paraphrase: alternative wording for same intent",
+    "boundary: edge cases and boundary conditions",
+    "metamorphic: if X changes, Y must change accordingly",
+
+    # Branch coverage markers
+    "branch: marks which decision tree branch is tested",
+]

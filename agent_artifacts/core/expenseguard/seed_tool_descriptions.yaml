@@ -1,0 +1,10 @@
+# Tool Description Overrides for ExpenseGuard Agent
+# START MINIMAL - PromptSmith should optimize these based on test failures
+# Tool descriptions heavily influence WHEN the agent calls each tool.
+
+get_policy: "Get expense policy for a role and country."
+get_receipt: "Fetch a receipt by ID."
+fx_convert: "Convert amount between currencies."
+submit_expense: "Submit an expense report."
+open_compliance_case: "Open a compliance case for violations."
+respond: "Submit structured response."

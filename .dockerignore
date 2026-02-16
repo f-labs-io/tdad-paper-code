@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+*.egg-info
+dist
+build
+.eggs
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Local development
+.env
+.env.local
+*.log
+
+# Results (generated outputs, not needed in image)
+results/
+
+# Documentation (not needed in runtime image)
+paper/
+docs/
+*.md
+!README.md
+
+# Test artifacts that shouldn't be baked in
+.coverage
+htmlcov/

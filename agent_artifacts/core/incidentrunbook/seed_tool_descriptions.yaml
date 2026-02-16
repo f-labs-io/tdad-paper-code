@@ -1,0 +1,10 @@
+# Tool Description Overrides for IncidentRunbook Agent
+# START MINIMAL - PromptSmith should optimize these based on test failures
+# Tool descriptions heavily influence WHEN the agent calls each tool.
+
+get_metrics: "Fetch service metrics."
+get_logs: "Fetch recent log lines."
+lookup_runbook: "Get runbook steps and escalation guidelines."
+create_incident: "Create an incident record."
+page_oncall: "Page the on-call team."
+respond: "Submit structured response."
