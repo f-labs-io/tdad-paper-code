@@ -1,6 +1,20 @@
 # TDAD Reference Implementation (SpecSuite-Core)
 
+[![Paper](https://img.shields.io/badge/arXiv-2603.08806-b31b1b.svg)](https://arxiv.org/abs/2603.08806)
+[![Dataset on HF](https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-sm.svg)](https://huggingface.co/datasets/f-labs-io/SpecSuite-Core)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 This repo is the **reference implementation** for the TDAD paper, containing SpecSuite-Core with 4 specs. The pipeline generates all artifacts (tests, fixtures, mutations) from the spec alone; SupportOps includes generated outputs as a worked example.
+
+The benchmark specifications and results are also available on [HuggingFace Datasets](https://huggingface.co/datasets/f-labs-io/SpecSuite-Core):
+
+```python
+from datasets import load_dataset
+
+specs = load_dataset("f-labs-io/SpecSuite-Core", "specs")       # 8 spec versions
+mutations = load_dataset("f-labs-io/SpecSuite-Core", "mutations") # 27 mutation intents
+results = load_dataset("f-labs-io/SpecSuite-Core", "results")     # 24 pipeline runs
+```
 
 | Spec | Domain | Status |
 |------|--------|--------|
